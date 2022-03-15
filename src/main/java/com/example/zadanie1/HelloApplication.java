@@ -18,8 +18,10 @@ import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 
 import javax.imageio.ImageIO;
+import java.awt.*;
 import java.awt.image.BufferedImage;
 
+import java.awt.image.WritableRaster;
 import java.io.*;
 import java.util.Arrays;
 
@@ -33,12 +35,16 @@ public class HelloApplication extends Application {
     String imagePath = System.getProperty("user.dir") + "\\img\\default.jpg";
     ImageView originalImageView = new ImageView();
     ImageView convertedImageView = new ImageView();
+    ImageView equalizedImgImageView = new ImageView();
     File file = new File(imagePath);
 
     Image originalImage;
     Image convertedImage;
 
     BufferedImage img;
+
+    VBox ImageBox = new VBox();
+    VBox HistogramBox = new VBox();
     @Override
     public void start(Stage stage) throws IOException {
 
@@ -107,19 +113,27 @@ public class HelloApplication extends Application {
                 return;
             }
 
-            int size = (int) (originalImage.getWidth() *originalImage.getHeight());
+            BufferedImage grayScaleImg = getGrayscaleImage(img);
 
-            //Lut arrays for compounds
-            int[] LUTred = calculateLUT(histogramRed, size);
-            int[] LUTgreen = calculateLUT(histogramGreen, size);
-            int[] LUTblue = calculateLUT(histogramBlue, size);
+            BufferedImage equalizedImg = equalize(grayScaleImg);
+
+            equalizedImgImageView.setImage(convertToFxImage(equalizedImg));
+
+            //Equalized Image display
+            equalizedImgImageView.setX(10);
+            equalizedImgImageView.setY(700);
+            equalizedImgImageView.setFitHeight(300);
+            equalizedImgImageView.setFitWidth(300);
+            equalizedImgImageView.setPreserveRatio(true);
+
+
+            ImageBox.getChildren().addAll(equalizedImgImageView);
+
+
         });
 
         HBox buttonBox = new HBox();
         buttonBox.getChildren().addAll(loadBtn, saveBtn, equalizeHistogramBtn);
-
-
-
 
 
 
@@ -137,7 +151,9 @@ public class HelloApplication extends Application {
         convertedImageView.setFitWidth(300);
         convertedImageView.setPreserveRatio(true);
 
-        VBox ImageBox = new VBox();
+
+
+
         ImageBox.getChildren().addAll(originalImageView, convertedImageView);
 
 
@@ -172,9 +188,65 @@ public class HelloApplication extends Application {
 
         histogramChart.getData().addAll(seriesRed, seriesAvg, seriesGreen, seriesBlue );
 
+        HistogramBox.getChildren().addAll(histogramChart);
+
 
         HBox hBox = new HBox();
-        hBox.getChildren().addAll(ImageBox, histogramChart, buttonBox);
+        hBox.getChildren().addAll(ImageBox, HistogramBox, buttonBox);
+
+
+        /***** Otsu Binarization  *****/
+        // Byte array
+        BufferedImage grayscaleOriginalImg = getGrayscaleImage(img);
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        ImageIO.write(grayscaleOriginalImg, "jpg", bos);
+        byte [] srcData = bos.toByteArray();
+
+        int[] histData = new int[256];
+
+        // Calculate histogram
+        int ptr = 0;
+        while (ptr < srcData.length) {
+            int h = 0xFF & srcData[ptr];
+            histData[h] ++;
+            ptr ++;
+        }
+
+// Total number of pixels
+        int total = srcData.length;
+
+        float sum = 0;
+        for (int t=0 ; t<256 ; t++) sum += t * histData[t];
+
+        float sumB = 0;
+        int wB = 0;
+        int wF = 0;
+
+        float varMax = 0;
+        int threshold = 120;
+
+        for (int t=0 ; t<256 ; t++) {
+            wB += histData[t];               // Weight Background
+            if (wB == 0) continue;
+
+            wF = total - wB;                 // Weight Foreground
+            if (wF == 0) break;
+
+            sumB += (float) (t * histData[t]);
+
+            float mB = sumB / wB;            // Mean Background
+            float mF = (sum - sumB) / wF;    // Mean Foreground
+
+            // Calculate Between Class Variance
+            float varBetween = (float)wB * (float)wF * (mB - mF) * (mB - mF);
+
+            // Check if new maximum found
+            if (varBetween > varMax) {
+                varMax = varBetween;
+                threshold = t;
+            }
+        }
+
 
         Group root = new Group(hBox);
         Scene scene = new Scene(root, 1295, 800);
@@ -251,6 +323,84 @@ public class HelloApplication extends Application {
         }
         // return result value.
         return image;
+    }
+
+    BufferedImage getGrayscaleImage(BufferedImage src) {
+        BufferedImage gImg = new BufferedImage(src.getWidth(), src.getHeight(),
+                BufferedImage.TYPE_BYTE_GRAY);
+        WritableRaster wr = src.getRaster();
+        WritableRaster gr = gImg.getRaster();
+        for(int i=0;i<wr.getWidth();i++){
+            for(int j=0;j<wr.getHeight();j++){
+                gr.setSample(i, j, 0, wr.getSample(i, j, 0));
+            }
+        }
+        gImg.setData(gr);
+        return gImg;
+    }
+
+    BufferedImage equalize(BufferedImage src){
+        BufferedImage nImg = new BufferedImage(src.getWidth(), src.getHeight(),
+                BufferedImage.TYPE_BYTE_GRAY);
+
+        WritableRaster wr = src.getRaster();
+        WritableRaster er = nImg.getRaster();
+
+        int totpix= wr.getWidth() * wr.getHeight();
+        int[] histogram = new int[256];
+
+        for (int x = 0; x < wr.getWidth(); x++) {
+            for (int y = 0; y < wr.getHeight(); y++) {
+                histogram[wr.getSample(x, y, 0)]++;
+            }
+        }
+
+        int[] chistogram = new int[256];
+        chistogram[0] = histogram[0];
+        for(int i=1;i<256;i++){
+            chistogram[i] = chistogram[i-1] + histogram[i];
+        }
+
+        float[] arr = new float[256];
+        for(int i=0;i<256;i++){
+            arr[i] =  (float)((chistogram[i]*255.0)/(float)totpix);
+        }
+
+        for (int x = 0; x < wr.getWidth(); x++) {
+            for (int y = 0; y < wr.getHeight(); y++) {
+                int nVal = (int) arr[wr.getSample(x, y, 0)];
+                er.setSample(x, y, 0, nVal);
+            }
+        }
+        nImg.setData(er);
+
+        // Histogram display
+        // Defining Axis
+        NumberAxis xAxis = new NumberAxis();
+        NumberAxis yAxis = new NumberAxis();
+
+        LineChart<Number, Number> histogramEqualizeChart = new LineChart<>(xAxis, yAxis);
+        histogramEqualizeChart.setCreateSymbols(false);
+
+
+        // Defining Series
+        XYChart.Series serieEqualize = new XYChart.Series<>();
+
+
+        // Setting Series Labels
+        serieEqualize.setName("serie");
+
+        // Setting Series Data
+        for(int i = 0; i < 255; i++) {
+            serieEqualize.getData().add(new XYChart.Data(i, chistogram[i]));
+        }
+
+        histogramEqualizeChart.getData().addAll(serieEqualize);
+
+        HistogramBox.getChildren().removeAll();
+        HistogramBox.getChildren().addAll(histogramEqualizeChart);
+
+        return nImg;
     }
 
     private static Image convertToFxImage(BufferedImage image) {
